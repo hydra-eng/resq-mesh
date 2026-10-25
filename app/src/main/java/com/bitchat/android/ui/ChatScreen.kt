@@ -59,7 +59,7 @@ import com.bitchat.android.ui.theme.BitchatMotion
  * - ChatUIUtils: Utility functions for formatting and colors
  */
 @Composable
-fun ChatScreen(viewModel: ChatViewModel) {
+fun ChatScreen(viewModel: ChatViewModel, onResqSettings: (() -> Unit)? = null) {
     val colorScheme = MaterialTheme.colorScheme
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val connectedPeers by viewModel.connectedPeers.collectAsStateWithLifecycle()
@@ -253,6 +253,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
 
     // Determine whether to show media buttons (only hide in geohash location chats)
     val showMediaButtons = when {
+        com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh" && currentChannel!=null -> false
         currentChannel != null -> true
         else -> selectedLocationChannel !is com.bitchat.android.geohash.ChannelID.Location
     }
@@ -457,8 +458,8 @@ fun ChatScreen(viewModel: ChatViewModel) {
             viewModel = viewModel,
             colorScheme = colorScheme,
             onSidebarToggle = { viewModel.showMeshPeerList() },
-            onShowAppInfo = { viewModel.showAppInfo() },
-            onPanicClear = { viewModel.panicClearAllData() },
+            onShowAppInfo = { if(onResqSettings!=null) onResqSettings() else viewModel.showAppInfo() },
+            onPanicClear = { if(onResqSettings!=null) onResqSettings() else viewModel.panicClearAllData() },
             onLocationChannelsClick = { showLocationChannelsSheet = true },
             onLocationNotesClick = {
                 nearbyNotesController.reveal()

@@ -122,7 +122,7 @@ class MessageRouter private constructor(
         val meshTarget = resolution.meshPeerID ?: toPeerID.takeIf { ContactIdentityResolver.isMeshPeerId(it) }
         val nostrTarget = resolution.noiseKeyHex ?: toPeerID
 
-        if (com.bitchat.android.nostr.GeohashAliasRegistry.contains(toPeerID)) {
+        if (com.bitchat.android.BuildConfig.APPLICATION_ID != "org.cascade.mesh" && com.bitchat.android.nostr.GeohashAliasRegistry.contains(toPeerID)) {
             Log.d(TAG, "Routing PM via Nostr (geohash) to alias ${toPeerID.take(12)}… id=${messageID.take(8)}…")
             val recipientHex = com.bitchat.android.nostr.GeohashAliasRegistry.get(toPeerID)
             if (recipientHex != null) {
@@ -160,14 +160,14 @@ class MessageRouter private constructor(
             mesh.sendReadReceipt(receipt.originalMessageID, meshTarget, mesh.getPeerNicknames()[meshTarget] ?: mesh.myPeerID)
         } else {
             Log.d(TAG, "Routing READ via Nostr to ${toPeerID.take(8)}… id=${receipt.originalMessageID.take(8)}…")
-            nostr.sendReadReceipt(receipt, nostrTarget)
+            if(com.bitchat.android.BuildConfig.APPLICATION_ID != "org.cascade.mesh") nostr.sendReadReceipt(receipt, nostrTarget)
         }
     }
 
     fun sendDeliveryAck(messageID: String, toPeerID: String) {
         // Mesh delivery ACKs are sent by the receiver automatically.
         // Only route via Nostr when mesh path isn't available or when this is a geohash alias
-        if (com.bitchat.android.nostr.GeohashAliasRegistry.contains(toPeerID)) {
+        if (com.bitchat.android.BuildConfig.APPLICATION_ID != "org.cascade.mesh" && com.bitchat.android.nostr.GeohashAliasRegistry.contains(toPeerID)) {
             val recipientHex = com.bitchat.android.nostr.GeohashAliasRegistry.get(toPeerID)
             if (recipientHex != null) {
                 nostr.sendDeliveryAckGeohash(messageID, recipientHex, try { com.bitchat.android.nostr.NostrIdentityBridge.getCurrentNostrIdentity(context)!! } catch (_: Exception) { return })
@@ -177,7 +177,7 @@ class MessageRouter private constructor(
         val resolution = ContactDirectory.resolve(toPeerID)
         val meshTarget = resolution.meshPeerID ?: toPeerID.takeIf { ContactIdentityResolver.isMeshPeerId(it) }
         if (!(meshTarget != null && (mesh.getPeerInfo(meshTarget)?.isConnected == true) && mesh.hasEstablishedSession(meshTarget))) {
-            nostr.sendDeliveryAck(messageID, resolution.noiseKeyHex ?: toPeerID)
+            if(com.bitchat.android.BuildConfig.APPLICATION_ID != "org.cascade.mesh") nostr.sendDeliveryAck(messageID, resolution.noiseKeyHex ?: toPeerID)
         }
     }
 
@@ -190,7 +190,7 @@ class MessageRouter private constructor(
             val nickname = mesh.getPeerNicknames()[meshTarget] ?: meshTarget
             mesh.sendPrivateMessage(content, meshTarget, nickname, null)
         } else {
-            nostr.sendFavoriteNotification(resolution.noiseKeyHex ?: toPeerID, isFavorite)
+            if(com.bitchat.android.BuildConfig.APPLICATION_ID != "org.cascade.mesh") nostr.sendFavoriteNotification(resolution.noiseKeyHex ?: toPeerID, isFavorite)
         }
     }
 
@@ -341,6 +341,7 @@ class MessageRouter private constructor(
     }
 
     private fun canSendViaNostr(peerID: String): Boolean {
+        if(com.bitchat.android.BuildConfig.APPLICATION_ID == "org.cascade.mesh") return false
         return try {
             val resolution = ContactDirectory.resolve(peerID)
             if (resolution.isMutualFavorite && resolution.nostrPubkey != null) return true

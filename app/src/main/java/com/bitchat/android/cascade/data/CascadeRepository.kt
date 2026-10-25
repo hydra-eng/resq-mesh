@@ -25,10 +25,13 @@ data class PrivateRecord(val text: String, val latitude: Double?, val longitude:
 data class PeerReview(val capabilities: Set<String>, val group: String, val verifiedAt: Long)
 data class SavedContact(val peer: String,val name: String)
 data class DirectChat(val id: String,val peer: String,val text: String,val outgoing: Boolean,val time: Long,val status: String)
+data class GpsFix(val latitude: Double, val longitude: Double, val accuracy: Float, val elapsedRealtime: Long) {
+    fun isFresh(now: Long = android.os.SystemClock.elapsedRealtime()) = now - elapsedRealtime in 0..120_000
+}
 data class CascadeState(
     val ready: Boolean=false, val onboarded: Boolean=false, val identity: String="", val role: Role=Role.RELAY,
     val battery: Int=100, val saver: Boolean=false, val dark: Boolean=false, val language: String="EN",
-    val cell: String="", val sharePrecise: Boolean=false, val ttlHours: Int=6, val hopLimit: Int=7, val mesh: MeshStatus=MeshStatus(),
+    val cell: String="", val gps: GpsFix?=null, val locationStatus: String="Location not set", val ttlHours: Int=6, val hopLimit: Int=7, val mesh: MeshStatus=MeshStatus(),
     val facts: FactSet=FactSet(), val incidents: List<Distress> = emptyList(), val responders: List<Responder> = emptyList(),
     val dispatches: List<Dispatch> = emptyList(), val assignments: List<Assignment> = emptyList(),
     val hazards: Map<String,HazardCell> = emptyMap(), val merge: MergeResult=MergeResult(emptySet(),emptySet(),emptySet(),emptyList()),
@@ -70,8 +73,8 @@ class CascadeRepository @Inject constructor(@ApplicationContext private val cont
             val identity=PacketCrypto.identity(pub)
             mutable.value=mutable.value.copy(ready=true,identity=identity,onboarded=vault.getBoolean("onboarded",false),
                 role=runCatching { Role.valueOf(vault.getString("role","RELAY")!!) }.getOrDefault(Role.RELAY),
-                cell=vault.getString("cell","").orEmpty(),saver=vault.getBoolean("saver",false),dark=vault.getBoolean("dark",false),
-                language=vault.getString("language","EN").orEmpty(),sharePrecise=vault.getBoolean("precise",false),
+                cell="",saver=vault.getBoolean("saver",false),dark=vault.getBoolean("dark",false),
+                language=vault.getString("language","EN").orEmpty(),
                 ttlHours=vault.getInt("ttl",6),hopLimit=vault.getInt("hops",7),capabilities=vault.getStringSet("capabilities",emptySet()).orEmpty().toSet(),
                 capacity=vault.getInt("capacity",1),radius=vault.getInt("radius",5000),available=vault.getBoolean("available",false),
                 blocked=vault.getStringSet("blocked",emptySet()).orEmpty().toSet())
@@ -172,17 +175,29 @@ class CascadeRepository @Inject constructor(@ApplicationContext private val cont
             "saver" -> { vault.edit().putBoolean(key,value.toBoolean()).apply(); mutable.value=mutable.value.copy(saver=value.toBoolean()) }
             "dark" -> { vault.edit().putBoolean(key,value.toBoolean()).apply(); mutable.value=mutable.value.copy(dark=value.toBoolean()) }
             "language" -> { vault.edit().putString(key,value).apply(); mutable.value=mutable.value.copy(language=value) }
-            "precise" -> { vault.edit().putBoolean(key,value.toBoolean()).apply(); mutable.value=mutable.value.copy(sharePrecise=value.toBoolean()) }
             "ttl" -> { val hours=(value.toIntOrNull() ?: 6).coerceIn(1,24); vault.edit().putInt("ttl",hours).apply(); mutable.value=mutable.value.copy(ttlHours=hours) }
             "hops" -> { val limit=(value.toIntOrNull() ?: 7).coerceIn(1,7); vault.edit().putInt("hops",limit).apply(); transport.hopLimit=limit; mutable.value=mutable.value.copy(hopLimit=limit) }
         }
     } }
+    fun clearLocation() { enqueue { mutable.value=mutable.value.copy(gps=null,cell="",locationStatus="Location permission needed") } }
+    fun locationStatus(message: String) { enqueue { mutable.value=mutable.value.copy(locationStatus=message) } }
+    fun acceptLocation(fix: GpsFix) { enqueue {
+        if(!fix.isFresh() || !fix.latitude.isFinite() || !fix.longitude.isFinite() || fix.latitude !in -90.0..90.0 || fix.longitude !in -180.0..180.0 || !fix.accuracy.isFinite() || fix.accuracy !in 0f..5000f) {
+            mutable.value=mutable.value.copy(locationStatus="Waiting for a reliable location"); return@enqueue
+        }
+        mutable.value=mutable.value.copy(gps=fix,cell=Geo.encode(fix.latitude,fix.longitude),locationStatus="Location ready · accuracy about ${fix.accuracy.toInt()} m")
+    } }
+    fun sendLocatedSos(text: String, urgency: Int, count: Int, photo: String?) {
+        val fix=mutable.value.gps
+        if(fix==null || !fix.isFresh()) { notice("Refresh your location before sending."); return }
+        sendSos(text,Geo.encode(fix.latitude,fix.longitude),urgency,count,fix.latitude,fix.longitude,photo)
+    }
     fun setCell(cell: String) { enqueue {
         require(Geo.valid(cell.lowercase()))
         vault.edit().putString("cell",cell.lowercase()).apply(); mutable.value=mutable.value.copy(cell=cell.lowercase())
     } }
     private fun newPacket(kind: EventKind,fields: Map<String,String>,cell: String=mutable.value.cell,life: Long=mutable.value.ttlHours*3_600_000L): SignedPacket {
-        require(Geo.valid(cell)) { "Confirm a five-character coarse geohash" }
+        require(Geo.valid(cell)) { "Wait for your location to be ready" }
         val now=System.currentTimeMillis(); val pub=PacketCrypto.b64(requireNotNull(crypto.getSigningPublicKey()))
         val nonce=PacketCrypto.b64(PacketCrypto.randomBytes(16))
         val fact=Fact("",kind,mutable.value.identity,mutable.value.facts.nextClock(),now,now+life,cell,fields)
@@ -248,13 +263,14 @@ class CascadeRepository @Inject constructor(@ApplicationContext private val cont
         notice("SOS marked safe. Responders already at the door remain protected.")
     } }
     fun profile(capabilities: String,capacity: Int,radius: Int,available: Boolean) { enqueue {
+        if(available && mutable.value.gps?.isFresh()!=true) { notice("Refresh your location before offering help."); return@enqueue }
         val normalized=capabilities.lowercase().split(Regex("[,\\s]+" )).filter { it.matches(Regex("[a-z]{2,20}")) }.take(12).toSet()
         mutable.value=mutable.value.copy(capabilities=normalized,capacity=capacity.coerceIn(1,100),radius=radius.coerceIn(250,50000),available=available,role=Role.RESPONDER)
         vault.edit().putStringSet("capabilities",normalized).putInt("capacity",mutable.value.capacity).putInt("radius",mutable.value.radius).putBoolean("available",available).putString("role","RESPONDER").apply()
         publishBeacon(); notice("Responder profile published. Clinical skills require in-person verification on assigning devices."); planOffers()
     } }
     private suspend fun publishBeacon() {
-        val s=mutable.value; if(!Geo.valid(s.cell)) return
+        val s=mutable.value; if(!Geo.valid(s.cell) || s.gps?.isFresh()!=true) return
         save(newPacket(EventKind.BEACON,mapOf("capabilities" to s.capabilities.sorted().joinToString(","),"capacity" to s.capacity.toString(),"radius" to s.radius.toString(),"battery" to s.battery.toString(),"available" to s.available.toString()),life=180000))
         lastBeacon=System.currentTimeMillis()
     }
@@ -304,7 +320,7 @@ class CascadeRepository @Inject constructor(@ApplicationContext private val cont
             if(d.owner==s.identity && !vault.getBoolean("sent-${acceptance.id}",false)) {
                 val details=drafts[d.incident] ?: return@forEach
                 val secret=vault.getString("exchange-${d.id}",null)?.let(PacketCrypto::unb64) ?: return@forEach
-                val shared=if(s.sharePrecise) details else details.copy(latitude=null,longitude=null)
+                val shared=details
                 val encoded=PacketCrypto.b64(gson.toJson(shared).toByteArray())
                 val chunks=encoded.chunked(900); require(chunks.size<=80)
                 chunks.forEachIndexed { index,chunk ->
@@ -333,6 +349,7 @@ class CascadeRepository @Inject constructor(@ApplicationContext private val cont
         }
     }
     fun hazard(type: String,severity: Int,depth: Int,minutes: Int,cell: String=mutable.value.cell) { enqueue {
+        if(mutable.value.gps?.isFresh()!=true || cell!=mutable.value.cell) { notice("Refresh your location and report only the area you are in."); return@enqueue }
         require(type in setOf("FLOOD","CURRENT","DEBRIS","ELECTRICAL","SAFE"))
         save(newPacket(EventKind.HAZARD,mapOf("type" to type,"severity" to if(type=="SAFE") "0" else severity.coerceIn(1,5).toString(),"depth" to depth.coerceIn(0,500).toString()),cell,minutes.coerceIn(1,60)*60000L))
         notice("Observation published. Independent in-person-verified reporters are needed for corroboration.")
@@ -381,11 +398,10 @@ class CascadeRepository @Inject constructor(@ApplicationContext private val cont
         return "resQ mesh — sanitized local log\nNodes visible: ${s.mesh.peers.size}\nIncidents: ${s.incidents.size}\nRejected packets: ${s.rejectionCount}\n\n"+
             s.events.filterNot { it.contains("challenge",true) }.joinToString("\n")+"\n\n"+s.mergeLog.joinToString("\n")+"\n\n"+s.simulation
     }
-    fun wipe() { enqueue {
-        transport.stop(); context.stopService(android.content.Intent(context,com.bitchat.android.cascade.CascadeService::class.java))
-        db.facts().wipe(); vault.edit().clear().commit(); crypto.clearPersistentIdentity()
-        gate.clear(); packets.clear(); drafts.clear(); receivedParts.clear()
-        mutable.value=CascadeState(ready=true,identity=PacketCrypto.identity(requireNotNull(crypto.getSigningPublicKey())),notice="Local data wiped. Fresh identity created; complete onboarding to rejoin.")
-    } }
+    fun wipe() {
+        // Android clears all app-owned stores, including both emergency and upstream chat data.
+        if(!context.getSystemService(android.app.ActivityManager::class.java).clearApplicationUserData())
+            notice("Android could not clear all data. Use App info > Storage > Clear storage.")
+    }
     fun notifyUser(message: String) { notice(message) }
 }

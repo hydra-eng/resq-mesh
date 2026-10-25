@@ -937,6 +937,13 @@ class ChatViewModel(
             return
         }
         
+        if (com.bitchat.android.BuildConfig.APPLICATION_ID == "org.cascade.mesh" &&
+            content.toByteArray(Charsets.UTF_8).size > 4000) {
+            messageManager.addSystemMessage("Message is too long. Please keep it under 4 KB.")
+            onAccepted(false)
+            return
+        }
+
         // Check for commands
         if (content.startsWith("/")) {
             val selectedLocationForCommand = state.selectedLocationChannel.value
@@ -956,12 +963,10 @@ class ChatViewModel(
                         channel,
                         state.getNicknameValue(),
                         mesh.myPeerID,
-                        onEncryptedPayload = {
-                            mesh.sendMessage(messageContent, mentions, channel)
+                        onEncryptedPayload = { encrypted ->
+                            mesh.sendMessage(com.bitchat.android.cascade.transport.GroupEnvelope.ENCRYPTED+java.util.Base64.getEncoder().encodeToString(encrypted), mentions, channel)
                         },
-                        onFallback = {
-                            mesh.sendMessage(messageContent, mentions, channel)
-                        }
+                        onFallback = { }
                     )
                 } else {
                     mesh.sendMessage(messageContent, mentions, channel)
@@ -1054,11 +1059,9 @@ class ChatViewModel(
                             state.getNicknameValue(),
                             mesh.myPeerID,
                             onEncryptedPayload = { encryptedData ->
-                                mesh.sendMessage(content, mentions, currentChannelValue)
+                                mesh.sendMessage(com.bitchat.android.cascade.transport.GroupEnvelope.ENCRYPTED+java.util.Base64.getEncoder().encodeToString(encryptedData), mentions, currentChannelValue)
                             },
-                            onFallback = {
-                                mesh.sendMessage(content, mentions, currentChannelValue)
-                            }
+                            onFallback = { }
                         )
                     } else {
                         mesh.sendMessage(content, mentions, currentChannelValue)
@@ -1389,6 +1392,11 @@ class ChatViewModel(
     // MARK: - BluetoothMeshDelegate Implementation (delegated)
     
     override fun didReceiveMessage(message: BitchatMessage) {
+        if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh" && message.channel!=null) {
+            if(message.senderPeerID?.let(privateChatManager::isPeerBlocked)==true || message.channel !in state.getJoinedChannelsValue()) return
+            if (channelManager.isChannelPasswordProtected(message.channel) && !message.isEncrypted) return
+            channelManager.addChannelMessage(message.channel,message,message.senderPeerID)
+        }
         meshDelegateHandler.didReceiveMessage(message)
     }
     

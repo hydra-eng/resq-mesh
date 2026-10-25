@@ -31,6 +31,13 @@ class ChannelManager(
     
     fun joinChannel(channel: String, password: String? = null, myPeerID: String): Boolean {
         val channelTag = if (channel.startsWith("#")) channel else "#$channel"
+        if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") {
+            if(!channelTag.matches(Regex("#[a-zA-Z0-9_-]{1,40}"))) return false
+            if(password!=null) {
+                if(password.length !in 8..128) return false
+                setChannelPassword(channelTag,password)
+            }
+        }
         
         // Check if already joined
         if (state.getJoinedChannelsValue().contains(channelTag)) {
@@ -123,11 +130,15 @@ class ChannelManager(
     // MARK: - Channel Password and Encryption
     
     private fun verifyChannelPassword(channel: String, password: String): Boolean {
-        // TODO: REMOVE THIS - FOR TESTING ONLY
+        if(password.length !in 8..128) return false
+        channelKeys[channel]=deriveChannelKey(password,channel)
+        channelPasswords[channel]=password
+        switchToChannel(channel)
         return true
     }
     
     private fun deriveChannelKey(password: String, channelName: String): SecretKeySpec {
+        if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") return org.cascade.crypto.GroupCipher.key(password,channelName)
         // PBKDF2 key derivation (same as iOS version)
         val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
         val spec = javax.crypto.spec.PBEKeySpec(
@@ -146,6 +157,7 @@ class ChannelManager(
     
     private fun decryptChannelMessage(encryptedContent: ByteArray, channel: String, testKey: SecretKeySpec?): String? {
         val key = testKey ?: channelKeys[channel] ?: return null
+        if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") return org.cascade.crypto.GroupCipher.open(encryptedContent,channel,key)
         
         try {
             if (encryptedContent.size < 16) return null // 12 bytes IV + minimum ciphertext
@@ -156,6 +168,7 @@ class ChannelManager(
             
             val gcmSpec = GCMParameterSpec(128, iv)
             cipher.init(Cipher.DECRYPT_MODE, key, gcmSpec)
+            if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") cipher.updateAAD(channel.toByteArray(Charsets.UTF_8))
             
             val decryptedData = cipher.doFinal(ciphertext)
             return String(decryptedData, Charsets.UTF_8)
@@ -174,8 +187,13 @@ class ChannelManager(
         onEncryptedPayload: (ByteArray) -> Unit,
         onFallback: () -> Unit
     ) {
-        // TODO: REIMPLEMENT – REMOVED FOR NOW
-        return
+        val key=channelKeys[channel] ?: return
+        if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") { onEncryptedPayload(org.cascade.crypto.GroupCipher.seal(content,channel,key));return }
+        val iv=ByteArray(12).also(java.security.SecureRandom()::nextBytes)
+        val cipher=Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE,key,GCMParameterSpec(128,iv))
+        if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") cipher.updateAAD(channel.toByteArray(Charsets.UTF_8))
+        onEncryptedPayload(iv+cipher.doFinal(content.toByteArray(Charsets.UTF_8)))
     }
     
     // MARK: - Channel Management
@@ -237,6 +255,7 @@ class ChannelManager(
     }
 
     fun setChannelPassword(channel: String, password: String) {
+        if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh" && password.length !in 8..128) return
 
         channelPasswords[channel] = password
 

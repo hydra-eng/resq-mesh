@@ -17,9 +17,30 @@ import javax.inject.Singleton
 @Singleton
 class BitchatTransport @Inject constructor(@ApplicationContext private val context: Context) : MeshTransport, BluetoothMeshDelegate {
     private var service: BluetoothMeshService? = null
+    private val chatStore=androidx.lifecycle.ViewModelStore()
+    private val mainHandler=android.os.Handler(android.os.Looper.getMainLooper())
+    private val chatModel=MutableStateFlow<com.bitchat.android.ui.ChatViewModel?>(null)
+    val offlineChat=chatModel.asStateFlow()
+    private fun initializeChat(radio: BluetoothMeshService) {
+        mainHandler.post {
+            if(service!==radio) return@post
+            chatStore.clear()
+            val factory=object:androidx.lifecycle.ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T:androidx.lifecycle.ViewModel> create(modelClass:Class<T>):T =
+                    com.bitchat.android.ui.ChatViewModel(context.applicationContext as android.app.Application,radio,unifiedForChat()) as T
+            }
+            val vm=androidx.lifecycle.ViewModelProvider(chatStore,factory)[com.bitchat.android.ui.ChatViewModel::class.java]
+            chatDelegate=vm;chatModel.value=vm;vm.didUpdatePeerList(mesh.value.peers)
+        }
+    }
+    var chatDelegate: com.bitchat.android.mesh.MeshDelegate? = null
+    fun radioForChat() = service
+    fun unifiedForChat(): com.bitchat.android.mesh.MeshService = com.bitchat.android.service.MeshServiceHolder.getUnifiedOrCreate(context).also { it.delegate=this }
+
     @Volatile private var starting=false
     var hopLimit: Int=7
-    private val ingress=IngressBudget()
+    private val ingress=IngressBudget(perLink=4800,total=19200,maxPayload=270336)
     private val relaySecurity=SecurityLayer(maxPerMinute=120)
     private val frames=MutableSharedFlow<MeshFrame>(extraBufferCapacity=64,onBufferOverflow=BufferOverflow.DROP_OLDEST)
     private val mesh=MutableStateFlow(MeshStatus())
@@ -45,10 +66,10 @@ class BitchatTransport @Inject constructor(@ApplicationContext private val conte
             starting=true
             runCatching { service?.stopServices() }; service=null
             mesh.value=MeshStatus(problem="Starting Bluetooth discovery…")
-            service=BluetoothMeshService(context).also { radio ->
+            service=com.bitchat.android.service.MeshServiceHolder.getOrCreate(context).also { radio ->
                 radio.delegate=this
                 radio.setPrivateApplicationDelivery { message ->
-                    if(message.content.startsWith(Wire.PREFIX) || message.content.startsWith("RQCHAT1:")) { didReceiveMessage(message);true } else false
+                    if(message.content.startsWith(Wire.PREFIX) || message.content.startsWith("RQCHAT1:") || message.content.startsWith(GroupEnvelope.PREFIX)) { didReceiveMessage(message);true } else false
                 }
                 radio.observeRadioStartup { started ->
                     starting=false
@@ -60,14 +81,16 @@ class BitchatTransport @Inject constructor(@ApplicationContext private val conte
                         when(MessageType.fromValue(routed.packet.type)) {
                             MessageType.MESSAGE -> {
                                 val content=String(routed.packet.payload,Charsets.UTF_8)
-                                content.startsWith(Wire.PREFIX) && relaySecurity.admit(content,routed.ingressLinkID ?: routed.relayAddress ?: "unknown",System.currentTimeMillis()) is Admission.Accepted
+                                if(content.startsWith(Wire.PREFIX)) relaySecurity.admit(content,routed.ingressLinkID ?: routed.relayAddress ?: "unknown",System.currentTimeMillis()) is Admission.Accepted else content.length<=8192
                             }
-                            MessageType.FILE_TRANSFER, MessageType.VOICE_FRAME -> false
+                            MessageType.FILE_TRANSFER -> routed.packet.payload.size<=270336
+                            MessageType.VOICE_FRAME -> routed.packet.payload.size<=16384
                             else -> true
                         }
                     }
                 )
-                radio.startServices()
+                com.bitchat.android.service.MeshServiceHolder.getUnifiedOrCreate(context).also { it.delegate=this }.startServices()
+                initializeChat(radio)
             }
             if(service?.isRadioStarted()!=true) { starting=false;mesh.value=MeshStatus(problem="Bluetooth discovery did not start. Tap Connect to retry.") }
         }.onFailure {
@@ -79,7 +102,7 @@ class BitchatTransport @Inject constructor(@ApplicationContext private val conte
             mesh.value=MeshStatus(problem=if(it is SecurityException) "Android blocked Bluetooth access. Review Nearby devices and precise location, then tap Connect." else "Bluetooth startup failed (${it.javaClass.simpleName}). Tap Connect to retry.")
         }
     }
-    override fun stop() { starting=false;service?.stopServices(); service=null; mesh.value=MeshStatus() }
+    override fun stop() { starting=false;com.bitchat.android.service.MeshServiceHolder.unifiedMeshService?.stopServices();service?.stopServices(); service=null; com.bitchat.android.service.MeshServiceHolder.clear(); mesh.value=MeshStatus(); mainHandler.post { if(service==null) { chatDelegate=null;chatModel.value=null;chatStore.clear() } } }
     override fun broadcast(payload: String) { require(payload.length<=Wire.MAX_FRAME); service?.sendMessage(payload,hopLimit=hopLimit.coerceIn(1,7).toUByte()) }
     override fun sendPrivate(peer: String,payload: String) { require(payload.length<=Wire.MAX_FRAME); service?.sendPrivateMessage(payload,peer,"CASCADE") }
     fun sendSealed(recipientIdentity: String,payload: String) {
@@ -89,6 +112,10 @@ class BitchatTransport @Inject constructor(@ApplicationContext private val conte
         else { if(peer!=null) radio.initiateNoiseHandshake(peer); broadcast(payload) }
     }
     override fun didReceiveMessage(message: BitchatMessage) {
+        if(message.content.startsWith(GroupEnvelope.PREFIX)) {
+            GroupEnvelope.decode(message) { bytes,channel -> chatDelegate?.decryptChannelMessage(bytes,channel) }?.let { chatDelegate?.didReceiveMessage(it) }
+            return
+        }
         if(message.isPrivate && message.content.startsWith("RQCHAT1:") && message.content.length<=1008) {
             val peer=message.senderPeerID ?: return
             if(service?.hasEstablishedSession(peer)==true) chats.tryEmit(ChatFrame(message.id,peer,message.content.removePrefix("RQCHAT1:")))
@@ -96,6 +123,7 @@ class BitchatTransport @Inject constructor(@ApplicationContext private val conte
         }
         if(message.content.startsWith(Wire.PREFIX) && message.content.length<=Wire.MAX_FRAME)
             frames.tryEmit(MeshFrame(message.content,message.senderPeerID ?: "unknown",message.isPrivate))
+        else chatDelegate?.didReceiveMessage(message)
     }
     override fun didUpdatePeerList(peers: List<String>) {
         val radio=service
@@ -106,17 +134,19 @@ class BitchatTransport @Inject constructor(@ApplicationContext private val conte
             PeerObservation(id,PacketCrypto.identity(key),radio.getPeerRSSI()[id],info.isDirectConnection,info.lastSeen)
         }
         mesh.value=mesh.value.copy(peers=peers.distinct().sorted(),observations=observations)
+        chatDelegate?.didUpdatePeerList(peers)
     }
     fun proximity(identity: String): PeerObservation? {
         didUpdatePeerList(mesh.value.peers)
         return mesh.value.observations.firstOrNull { it.signingId==identity && it.direct && it.rssi!=null && it.rssi in -90..-15 && System.currentTimeMillis()-it.observedAt in 0..120000 }
     }
-    override fun didReceiveChannelLeave(channel: String,fromPeer: String) = Unit
-    override fun didReceiveDeliveryAck(messageID: String,recipientPeerID: String) { chatAcks.tryEmit(messageID to recipientPeerID) }
-    override fun didReceiveReadReceipt(messageID: String,recipientPeerID: String) = Unit
-    override fun didReceiveVerifyChallenge(peerID: String,payload: ByteArray,timestampMs: Long) = Unit
-    override fun didReceiveVerifyResponse(peerID: String,payload: ByteArray,timestampMs: Long) = Unit
-    override fun decryptChannelMessage(encryptedContent: ByteArray,channel: String): String? = null
-    override fun getNickname()="CASCADE"
-    override fun isFavorite(peerID: String)=false
+    override fun didReceiveChannelLeave(channel: String,fromPeer: String) { chatDelegate?.didReceiveChannelLeave(channel,fromPeer) }
+    override fun didReceiveDeliveryAck(messageID: String,recipientPeerID: String) { chatAcks.tryEmit(messageID to recipientPeerID); chatDelegate?.didReceiveDeliveryAck(messageID,recipientPeerID) }
+    override fun didReceiveReadReceipt(messageID: String,recipientPeerID: String) { chatDelegate?.didReceiveReadReceipt(messageID,recipientPeerID) }
+    override fun didReceiveVerifyChallenge(peerID: String,payload: ByteArray,timestampMs: Long) { chatDelegate?.didReceiveVerifyChallenge(peerID,payload,timestampMs) }
+    override fun didReceiveVerifyResponse(peerID: String,payload: ByteArray,timestampMs: Long) { chatDelegate?.didReceiveVerifyResponse(peerID,payload,timestampMs) }
+    override fun didResolvePrivateMediaPolicy(peerID: String) { chatDelegate?.didResolvePrivateMediaPolicy(peerID) }
+    override fun decryptChannelMessage(encryptedContent: ByteArray,channel: String): String? = chatDelegate?.decryptChannelMessage(encryptedContent,channel)
+    override fun getNickname()=chatDelegate?.getNickname() ?: "resQ mesh"
+    override fun isFavorite(peerID: String)=chatDelegate?.isFavorite(peerID) ?: false
 }

@@ -223,7 +223,7 @@ class NotificationManager(
         val messageCount = notifications.size
 
         // Create intent to open the specific private chat
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val intent = Intent(context, if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") com.bitchat.android.cascade.CascadeActivity::class.java else MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_OPEN_PRIVATE_CHAT, true)
             putExtra(EXTRA_PEER_ID, senderPeerID)
@@ -376,7 +376,7 @@ class NotificationManager(
     }
 
     fun showVerificationNotification(title: String, body: String, peerID: String? = null) {
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val intent = Intent(context, if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") com.bitchat.android.cascade.CascadeActivity::class.java else MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             if (peerID != null) {
                 putExtra(EXTRA_OPEN_PRIVATE_CHAT, true)
@@ -415,7 +415,7 @@ class NotificationManager(
         val totalMessages = pendingNotifications.values.sumOf { it.size }
         val senderCount = pendingNotifications.size
 
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val intent = Intent(context, if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") com.bitchat.android.cascade.CascadeActivity::class.java else MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
 
@@ -553,7 +553,7 @@ class NotificationManager(
         val firstMessageCount = notifications.count { it.isFirstMessage }
 
         // Create intent to open the specific geohash chat
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val intent = Intent(context, if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") com.bitchat.android.cascade.CascadeActivity::class.java else MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_OPEN_GEOHASH_CHAT, true)
             putExtra(EXTRA_GEOHASH, geohash)
@@ -642,7 +642,7 @@ class NotificationManager(
             notifications.count { it.isMention }
         }
 
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val intent = Intent(context, if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") com.bitchat.android.cascade.CascadeActivity::class.java else MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
 
@@ -773,7 +773,7 @@ class NotificationManager(
         val messageCount = notifications.size
 
         // Create intent to open the mesh chat (no specific peer, just main chat)
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val intent = Intent(context, if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") com.bitchat.android.cascade.CascadeActivity::class.java else MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             // No specific chat to open, just bring the app to foreground
         }

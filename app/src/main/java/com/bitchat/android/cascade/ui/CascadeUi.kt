@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.Map
@@ -30,10 +31,12 @@ import org.cascade.pipeline.ClaimVerifier
 import org.cascade.pipeline.Explainer
 
 @Composable
-fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
+fun CascadeUi(repository: CascadeRepository,device: DeviceActions,chatRequest: Pair<Long,String>?=null) {
     val s by repository.state.collectAsState()
     var screen by rememberSaveable { mutableStateOf("COMMAND") }
     var detail by rememberSaveable { mutableStateOf("") }
+    var chatPeer by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(chatRequest) { if(chatRequest!=null) { chatPeer=chatRequest.second;screen="CHAT" } }
     val scroll=rememberScrollState()
     LaunchedEffect(screen,s.onboarded) { scroll.scrollTo(0) }
     BackHandler(enabled=s.onboarded && screen!="COMMAND") { screen=if(screen=="DETAIL") "DISPATCH" else "COMMAND" }
@@ -48,18 +51,19 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
             window.statusBarColor=if(s.dark) android.graphics.Color.rgb(11,18,14) else android.graphics.Color.WHITE
         } }
         Scaffold(containerColor=MaterialTheme.colorScheme.background,
-            topBar={ StatusBar(s) { repository.setting("dark",(!s.dark).toString()) } },snackbarHost={ SnackbarHost(snack) },
+            topBar={ StatusBar(s,device.permissions) { repository.setting("dark",(!s.dark).toString()) } },snackbarHost={ SnackbarHost(snack) },
             bottomBar={ if(s.onboarded) BottomBar(screen) { screen=it } }
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
             HalftoneBackground(enabled=!s.saver,modifier=Modifier.matchParentSize())
-            Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(22.dp),verticalArrangement=Arrangement.spacedBy(22.dp)) {
+            if(s.onboarded && screen=="CHAT") OfflineChat(repository,device,chatPeer) { screen="SETTINGS" }
+            else Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(22.dp),verticalArrangement=Arrangement.spacedBy(22.dp)) {
                 if(!s.ready) { Headline("INITIALIZING","CASCADE\nMESH"); LinearProgressIndicator(Modifier.fillMaxWidth()); Text("Preparing encrypted local storage…") }
                 else if(!s.onboarded) Onboarding(s,repository,device)
                 else when(screen) {
-                    "COMMAND" -> Command(s,repository,{ screen=it },device)
+                    "COMMAND" -> Command(s,repository,{ chatPeer=null;screen=it },device)
                     "SOS" -> SosScreen(s,repository,device)
-                    "PROFILE" -> ProfileScreen(s,repository)
+                    "PROFILE" -> ProfileScreen(s,repository,device)
                     "DISPATCH" -> DispatchFeed(s,repository) { detail=it; screen="DETAIL" }
                     "DETAIL" -> DispatchDetail(s,repository,detail) { screen="MAP" }
                     "MAP" -> MapScreen(s,repository) { screen="HAZARD" }
@@ -69,7 +73,7 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
                     "MERGE" -> MergeScreen(s)
                     "SIMULATION" -> SimulationScreen(s,repository)
                     "SETTINGS" -> SettingsScreen(s,repository,device)
-                    "PEOPLE" -> PeopleScreen(s,repository)
+                    "PEOPLE" -> PeopleScreen(s,repository) { peer -> chatPeer=peer;screen="CHAT" }
                     else -> MoreScreen { screen=it }
                 }
                 Spacer(Modifier.height(12.dp))
@@ -79,21 +83,22 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
     }
 }
 
-@Composable private fun StatusBar(s: CascadeState,onTheme: ()->Unit) {
+@Composable private fun StatusBar(s: CascadeState,onBluetooth: ()->Unit,onTheme: ()->Unit) {
     Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).statusBarsPadding().padding(horizontal=18.dp,vertical=10.dp),verticalArrangement=Arrangement.spacedBy(7.dp)) {
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
             Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
                 Text("rQ",Modifier.background(Green,RoundedCornerShape(12.dp)).padding(10.dp),color=Blue,fontFamily=Mono,fontSize=17.sp,fontWeight=FontWeight.Medium)
                 Column { Text("resQ mesh",color=Ink,fontFamily=Display,fontSize=21.sp,fontWeight=FontWeight.Medium); Text("HELP IS CLOSER",color=MaterialTheme.colorScheme.onSurfaceVariant,fontFamily=Mono,fontSize=8.sp) }
             }
+            IconButton(onClick=onBluetooth) { Icon(Icons.Outlined.Bluetooth,contentDescription="Turn on Bluetooth or reconnect",tint=if(s.mesh.running) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
             TextButton(onClick=onTheme,modifier=Modifier.semantics { contentDescription=if(s.dark) "Switch to light theme" else "Switch to dark theme" }) { Text(if(s.dark) "LIGHT" else "DARK",fontFamily=Mono,fontSize=10.sp) }
         }
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
-            Label("● ${s.mesh.peers.size} NODES",Blue)
+            Label(if(s.mesh.running && s.mesh.peers.isNotEmpty()) "MESH ONLINE" else "MESH OFFLINE",Blue)
             Label("${s.battery}% PWR",Ink)
             Label(s.role.name,Ink)
         }
-        Text(s.mesh.problem ?: if(!s.mesh.running) "RADIO STOPPED / ENABLE BLUETOOTH" else if(s.mesh.peers.isEmpty()) "ISOLATED / WAITING FOR ANOTHER DEVICE" else "LOCAL ISLAND / GLOBAL CONNECTIVITY UNKNOWN",color=MaterialTheme.colorScheme.onSurfaceVariant,fontFamily=Mono,fontSize=9.sp)
+        Text(s.mesh.problem ?: if(!s.mesh.running) "RADIO STOPPED / ENABLE BLUETOOTH" else if(s.mesh.peers.isEmpty()) "Bluetooth active · waiting for nearby devices" else "${s.mesh.peers.size} nearby devices · internet not required",color=MaterialTheme.colorScheme.onSurfaceVariant,fontFamily=Mono,fontSize=9.sp)
     }
 }
 @Composable private fun BottomBar(screen: String,onNavigate: (String)->Unit) {
@@ -114,7 +119,7 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
         Label(when(step) { 0->"NO SERVER. NO SIGNAL REQUIRED."; 1->"BLUETOOTH + NEARBY DEVICES"; 2->"EVERY ROLE MATTERS"; else->"YOUR LOCAL SIGNING IDENTITY" })
         when(step) {
             0 -> { Text("A flood can cut the network. It cannot cut every connection.",fontFamily=Display,fontSize=27.sp,fontWeight=FontWeight.Bold); Text("Send an SOS, offer your skills, or relay a neighbour’s message. Nearby phones carry signed packets between islands."); Text("Delivery depends on nearby devices. An SOS is not a confirmed rescue.",fontSize=13.sp) }
-            1 -> { Text("Bluetooth discovers nearby phones. Android also requires location permission for discovery. Notification permission keeps the relay visible."); Action("GRANT PERMISSIONS",Blue,onClick=device.permissions); Action("BATTERY OPTIMIZATION",Ink,onClick=device.batterySettings); Text("You control location sharing separately. Precise coordinates stay private.",fontSize=13.sp) }
+            1 -> { Text("Bluetooth discovers nearby phones. Android also requires location permission for discovery. Notification permission keeps the relay visible."); Action("GRANT PERMISSIONS",Blue,onClick=device.permissions); Action("BATTERY OPTIMIZATION",Ink,onClick=device.batterySettings); Text("Location is filled automatically when you request or offer help. Exact coordinates are encrypted for the accepted responder.",fontSize=13.sp) }
             2 -> Role.entries.forEach { option -> Action("${if(role==option) "✓ " else ""}${when(option) { Role.VICTIM->"I may need help"; Role.RESPONDER->"I can offer help"; Role.RELAY->"Relay nearby messages" }}",if(role==option) Green else Paper) { role=option } }
             else -> { Text(s.identity.chunked(16).joinToString("\n"),fontFamily=Mono,fontSize=12.sp); Text("Stored on this device. Compare the full identity in person before sharing trust or verifying responder skills."); Badge("KEYS STORED ENCRYPTED",Green) }
         }
@@ -127,6 +132,8 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
     Headline("HOME",if(s.language=="HI") "एक दूसरे\nके साथ।" else "How can we\nhelp today?")
     Action(if(s.language=="HI") "SOS / मदद चाहिए" else "Request help / SOS",Blue) { haptic.performHapticFeedback(HapticFeedbackType.LongPress); navigate("SOS") }
     Action(if(s.language=="HI") "मैं मदद कर सकता हूँ →" else "Offer help",Green) { r.setRole(Role.RESPONDER); navigate("PROFILE") }
+    Action("Nearby devices · ${s.mesh.peers.size}",Paper) { navigate("PEOPLE") }
+    Action("Offline chats",Paper) { navigate("CHAT") }
     Panel {
         Label("NEARBY REQUESTS")
         Text("${s.incidents.size} active calls for help",color=Ink,fontFamily=Display,fontSize=24.sp,fontWeight=FontWeight.Medium)
@@ -148,8 +155,7 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
 }
 
 @Composable private fun SosScreen(s: CascadeState,r: CascadeRepository,device: DeviceActions) {
-    var text by rememberSaveable { mutableStateOf("") }; var cell by rememberSaveable(s.cell) { mutableStateOf(s.cell) }
-    var latitude by rememberSaveable { mutableStateOf("") }; var longitude by rememberSaveable { mutableStateOf("") }
+    var text by rememberSaveable { mutableStateOf("") }
     var count by rememberSaveable { mutableIntStateOf(1) }; var urgency by rememberSaveable { mutableFloatStateOf(4f) }
     var photo by remember { mutableStateOf<String?>(null) }; var translated by rememberSaveable { mutableStateOf(false) }
     val parsed=remember(text) { ClaimVerifier().parse(text.take(800)) }
@@ -173,16 +179,9 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
         }
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) { Label("URGENCY"); Badge("${urgency.toInt()} / 5",urgencyColor(urgency.toInt())) }
         Slider(value=urgency,onValueChange={ urgency=it },valueRange=1f..5f,steps=3,modifier=Modifier.semantics { contentDescription="SOS urgency from one to five" })
-        Input(cell,"COARSE GEOHASH / 5 CHARACTERS",{ cell=it.lowercase().take(5) })
-        Badge(if(Geo.valid(cell)) "CELL FORMAT VALID / GPS UNVERIFIED" else "CONFIRM YOUR COARSE CELL",Yellow)
-        Text("A coarse cell is roughly a few kilometres wide. BLE signal strength cannot prove GPS coordinates.",fontSize=12.sp)
-        Toggle("Share precise location after accept",s.sharePrecise) { r.setting("precise",it.toString()) }
-        if(s.sharePrecise) {
-            Input(latitude,"LATITUDE / MANUAL",{ latitude=it }); Input(longitude,"LONGITUDE / MANUAL",{ longitude=it })
-            Text("Coordinates are optional. If entered, they must match the coarse cell.",fontSize=12.sp)
-        }
-        Action("Send help request",Signal,text.isNotBlank() && Geo.valid(cell)) {
-            r.sendSos(text,cell,urgency.toInt(),count,if(s.sharePrecise) latitude.toDoubleOrNull() else null,if(s.sharePrecise) longitude.toDoubleOrNull() else null,photo)
+        LocationCard(s,device)
+        Action("Send help request",Signal,text.isNotBlank() && s.gps?.isFresh()==true) {
+            r.sendLocatedSos(text,urgency.toInt(),count,photo)
         }
     }
     mine.forEach { incident ->
@@ -197,8 +196,8 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
     }
 }
 
-@Composable private fun ProfileScreen(s: CascadeState,r: CascadeRepository) {
-    var capabilities by rememberSaveable { mutableStateOf(s.capabilities.joinToString(", ")) }; var cell by rememberSaveable(s.cell) { mutableStateOf(s.cell) }
+@Composable private fun ProfileScreen(s: CascadeState,r: CascadeRepository,device: DeviceActions) {
+    var capabilities by rememberSaveable { mutableStateOf(s.capabilities.joinToString(", ")) }
     var capacity by rememberSaveable { mutableFloatStateOf(s.capacity.toFloat()) }; var radius by rememberSaveable { mutableFloatStateOf(s.radius.toFloat()) }
     var available by rememberSaveable { mutableStateOf(s.available) }
     Headline("OFFER HELP","How can\nyou help?")
@@ -208,20 +207,20 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
         FlowRow(horizontalArrangement=Arrangement.spacedBy(5.dp)) { listOf("boat","medic","dialysis","vehicle","rope","generator","food").forEach { tag ->
             OutlinedButton(onClick={ capabilities=(capabilities.split(',').map(String::trim).filter(String::isNotBlank)+tag).distinct().joinToString(", ") },modifier=Modifier.heightIn(min=56.dp)) { Text(tag.uppercase(),fontFamily=Mono,fontSize=10.sp) }
         } }
-        Input(cell,"COARSE CELL",{ cell=it.lowercase().take(5) })
+        LocationCard(s,device)
         Label("PHYSICAL CAPACITY / ${capacity.toInt()} PEOPLE"); Slider(capacity,{capacity=it},valueRange=1f..20f,steps=18)
         Label("RESPONSE RADIUS / ${radius.toInt()} M"); Slider(radius,{radius=it},valueRange=250f..10000f)
         Toggle("Available for dispatch",available) { available=it }
         Toggle("Battery saver",s.saver) { r.setting("saver",it.toString()) }
         Text("Beacons expire after 3 minutes without refresh. Medical skills are self-declared until another person checks them in person.",fontSize=13.sp)
-        Action("Save and share availability",Blue,Geo.valid(cell)) { r.setCell(cell); r.profile(capabilities,capacity.toInt(),radius.toInt(),available) }
+        Action("Save and share availability",Blue,s.gps?.isFresh()==true) { r.profile(capabilities,capacity.toInt(),radius.toInt(),available) }
     }
 }
 
 @Composable private fun DispatchFeed(s: CascadeState,r: CascadeRepository,open: (String)->Unit) {
     Headline("HELP REQUESTS","Your help\nrequests","Direct offers expire after 60 seconds. Unanswered offers fall back to the next eligible responder.")
     val mine=s.dispatches.filter { it.responder==s.identity && !it.terminal && it.id in s.merge.retained }
-    if(mine.isEmpty()) EmptyState("Standing by.","No direct offers for this device. Set a coarse cell, publish your responder profile, and keep Bluetooth active.")
+    if(mine.isEmpty()) EmptyState("Standing by.","No direct offers for this device. Allow location, publish your responder profile, and keep Bluetooth active.")
     mine.forEach { d ->
         val incident=s.incidents.find { it.id==d.incident }
         Panel {
@@ -232,7 +231,7 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
                 Text(Explainer().explain(incident,distance,s.hazards[incident.cell]?.penalty ?: 400),fontSize=14.sp)
                 Label("REPORT TRUST / ${(incident.trust*100).toInt()}%")
                 LinearProgressIndicator(progress={ incident.trust.toFloat() },modifier=Modifier.fillMaxWidth(),color=Blue)
-                Text("Travel and battery estimates use coarse cells. Check the route on the ground.",fontSize=12.sp)
+                Text("Travel and battery estimates use approximate areas. Check the route on the ground.",fontSize=12.sp)
             }
             if(d.status==DispatchStatus.OFFER) {
                 Action("ACCEPT →",Green) { r.dispatch(d.id,DispatchStatus.ACCEPT) }
@@ -258,7 +257,7 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
         if(details!=null) {
             Text(details.text,fontSize=22.sp,fontWeight=FontWeight.Bold)
             Text("Medical flags: ${details.flags.joinToString().ifEmpty { "none parsed" }}")
-            if(details.latitude!=null) Text("Precise location: ${details.latitude}, ${details.longitude}",fontFamily=Mono,fontSize=12.sp)
+            if(details.latitude!=null) Text("Location: ${details.latitude}, ${details.longitude}",fontFamily=Mono,fontSize=12.sp)
             details.photo?.let { PrivatePhoto(it) }
         }
         Text("No trusted navigation route is available from sparse reports. An empty cell is unknown, not safe.",fontSize=14.sp)
@@ -279,7 +278,7 @@ fun CascadeUi(repository: CascadeRepository,device: DeviceActions) {
 
 @Composable private fun MoreScreen(navigate: (String)->Unit) {
     Headline("FIELD TOOLS","Tools and\nsettings")
-    listOf("PROFILE" to "Your helper profile","TOPOLOGY" to "Nearby network","SECURITY" to "Trust and security","HAZARD" to "Report a danger","MERGE" to "Reconnection history","SIMULATION" to "Test the network","SETTINGS" to "SETTINGS").forEachIndexed { i,(key,label) ->
+    listOf("CHAT" to "Offline chats and groups","PROFILE" to "Your helper profile","TOPOLOGY" to "Nearby network","SECURITY" to "Trust and security","HAZARD" to "Report a danger","MERGE" to "Reconnection history","SIMULATION" to "Test the network","SETTINGS" to "SETTINGS").forEachIndexed { i,(key,label) ->
         Action(label,if(i==5) Pink else if(i==2) Yellow else Paper) { navigate(key) }
     }
 }

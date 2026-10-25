@@ -94,11 +94,12 @@ class MediaSendingManager(
         channelOrNull: String?
     ): Boolean {
         val size = file.length()
-        if (size <= MAX_FILE_SIZE) return false
+        val allowedSize=if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") 262144L else MAX_FILE_SIZE
+        if (size <= allowedSize) return false
         Log.e(TAG, "❌ File too large: $size bytes (max: $MAX_FILE_SIZE)")
         val sizeMb = size / (1024 * 1024)
         val maxMb = MAX_FILE_SIZE / (1024 * 1024)
-        val text = "cannot send ${file.name}: file is too large (${sizeMb} MB, max $maxMb MB)"
+        val text = "Cannot send this file: ${size / 1024} KB exceeds the ${allowedSize / 1024} KB limit."
         when {
             toPeerIDOrNull != null -> {
                 val sys = BitchatMessage(

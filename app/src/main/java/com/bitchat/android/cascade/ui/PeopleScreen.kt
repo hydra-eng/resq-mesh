@@ -12,7 +12,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bitchat.android.cascade.data.*
 
-@Composable fun PeopleScreen(s: CascadeState,r: CascadeRepository) {
+@Composable fun PeopleScreen(s: CascadeState,r: CascadeRepository,onFullChat: (String)->Unit) {
     var selected by rememberSaveable { mutableStateOf("") }
     var name by rememberSaveable(selected) { mutableStateOf(s.contacts.firstOrNull { it.peer==selected }?.name.orEmpty()) }
     var draft by rememberSaveable(selected) { mutableStateOf("") }
@@ -67,6 +67,7 @@ import com.bitchat.android.cascade.data.*
                         }
                     }
                 }
+                Action("Chat with files and voice notes",Paper) { onFullChat(selected) }
                 Input(draft,"Message",{draft=it.take(1000)},2)
                 Action("Send privately",enabled=draft.isNotBlank() && selected in s.mesh.peers && s.mesh.running) {pending=draft.trim();r.sendChat(selected,draft)}
                 Text("Latest 500 messages are stored encrypted on this phone. “Queued” means delivery is not yet confirmed.",fontSize=11.sp,color=MaterialTheme.colorScheme.onSurfaceVariant)

@@ -28,6 +28,8 @@ import javax.inject.Inject
 
 data class DeviceActions(
     val permissions: () -> Unit,
+    val location: () -> Unit,
+    val shareApp: () -> Unit,
     val voice: ((String) -> Unit) -> Unit,
     val photo: ((String) -> Unit) -> Unit,
     val export: () -> Unit,
@@ -37,8 +39,21 @@ data class DeviceActions(
 @AndroidEntryPoint
 class CascadeActivity : ComponentActivity() {
     @Inject lateinit var repository: CascadeRepository
+    private val chatRequest=androidx.compose.runtime.mutableStateOf<Pair<Long,String>?>(null)
     private var voiceResult: ((String)->Unit)?=null
     private var photoResult: ((String)->Unit)?=null
+    private var locationJob: Job?=null
+    private val radioReceiver=object:android.content.BroadcastReceiver() {
+        override fun onReceive(context:android.content.Context,intent:Intent) {
+            when(intent.getIntExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE,-1)) {
+                android.bluetooth.BluetoothAdapter.STATE_ON -> startIfPermitted()
+                android.bluetooth.BluetoothAdapter.STATE_OFF -> repository.stopTransport()
+            }
+        }
+    }
+    private val gpsPermission=registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if(result.values.any { it }) locate() else repository.locationStatus("Location permission denied · allow it in app Settings")
+    }
     private var speech: SpeechRecognizer?=null
     private val io=CoroutineScope(SupervisorJob()+Dispatchers.IO)
     private val permissions=registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { startIfPermitted() }
@@ -65,15 +80,69 @@ class CascadeActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        acceptChatIntent(intent)
+        ContextCompat.registerReceiver(this,radioReceiver,android.content.IntentFilter(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED),ContextCompat.RECEIVER_EXPORTED)
         setContent { CascadeUi(repository,DeviceActions(
             permissions={ requestMeshPermissions() },
+            location={ requestLocation() },
+            shareApp={ shareApp() },
             voice={ callback -> voiceResult=callback; microphone.launch(Manifest.permission.RECORD_AUDIO) },
             photo={ callback -> photoResult=callback; picker.launch("image/*") },
             export={ export() },
             batterySettings={ startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
-        )) }
+        ),chatRequest.value) }
         lifecycleScope.launch { val initial=repository.state.first { it.ready }; if(initial.onboarded) startIfPermitted() }
     }
+    private fun acceptChatIntent(intent: Intent) {
+        if(intent.getBooleanExtra(com.bitchat.android.ui.NotificationManager.EXTRA_OPEN_PRIVATE_CHAT,false)) {
+            intent.getStringExtra(com.bitchat.android.ui.NotificationManager.EXTRA_PEER_ID)?.let { peer ->
+                if(peer.length in 1..128) chatRequest.value=System.nanoTime() to peer
+            }
+        }
+    }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent);setIntent(intent);acceptChatIntent(intent) }
+    private fun requestLocation() {
+        if(ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_COARSE_LOCATION)!=PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
+            gpsPermission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION))
+        } else locate()
+    }
+    @Suppress("MissingPermission")
+    private fun locate() {
+        locationJob?.cancel()
+        locationJob=lifecycleScope.launch {
+            repository.locationStatus("Finding your location…")
+            val manager=getSystemService(android.location.LocationManager::class.java)
+            val fine=ContextCompat.checkSelfPermission(this@CascadeActivity,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED
+            val providers=listOfNotNull(if(fine) android.location.LocationManager.GPS_PROVIDER else null,android.location.LocationManager.NETWORK_PROVIDER)
+                .filter { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
+            if(providers.isEmpty()) { repository.locationStatus("Location is off · turn it on in Quick Settings"); return@launch }
+            try {
+                val fix=withTimeoutOrNull(30_000) {
+                    suspendCancellableCoroutine<android.location.Location> { continuation ->
+                        val listener=object : android.location.LocationListener {
+                            override fun onLocationChanged(location: android.location.Location) {
+                                val age=android.os.SystemClock.elapsedRealtimeNanos()-location.elapsedRealtimeNanos
+                                if(age !in 0..120_000_000_000L || !location.hasAccuracy() || location.accuracy>5000f) return
+                                if(continuation.isActive) continuation.resume(location) { _,_,_ -> }
+                                manager.removeUpdates(this)
+                            }
+                            override fun onProviderEnabled(provider: String) = Unit
+                            override fun onProviderDisabled(provider: String) = Unit
+                            @Deprecated("Legacy callback") override fun onStatusChanged(provider: String?,status: Int,extras: Bundle?) = Unit
+                        }
+                        continuation.invokeOnCancellation { manager.removeUpdates(listener) }
+                        try { providers.forEach { manager.requestLocationUpdates(it,1000L,0f,listener,android.os.Looper.getMainLooper()) } }
+                        catch(error: Exception) { manager.removeUpdates(listener); if(continuation.isActive) continuation.resumeWith(Result.failure(error)) }
+                    }
+                }
+                if(fix==null) repository.locationStatus("No location fix yet · move outdoors and retry")
+                else repository.acceptLocation(com.bitchat.android.cascade.data.GpsFix(fix.latitude,fix.longitude,fix.accuracy,fix.elapsedRealtimeNanos/1_000_000))
+            } catch(cancelled: CancellationException) { throw cancelled }
+            catch(error: Exception) { repository.locationStatus("Location unavailable · review app permissions and retry") }
+        }
+    }
+    override fun onStop() { locationJob?.cancel(); super.onStop() }
     private fun requiredPermissions() = buildList {
         addAll(com.bitchat.android.cascade.transport.RadioReadiness.permissions())
         if(Build.VERSION.SDK_INT>=33) add(Manifest.permission.POST_NOTIFICATIONS)
@@ -99,6 +168,7 @@ class CascadeActivity : ComponentActivity() {
     }
     override fun onResume() {
         super.onResume()
+        if(ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_COARSE_LOCATION)!=PackageManager.PERMISSION_GRANTED && ContextCompat.checkSelfPermission(this,Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) repository.clearLocation()
         if(repository.state.value.ready && repository.state.value.onboarded) startIfPermitted()
     }
     private fun startVoice() {
@@ -122,6 +192,17 @@ class CascadeActivity : ComponentActivity() {
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE,if(repository.state.value.language=="EN") "en-IN" else "hi-IN").putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,true))
         }
     }
+    private fun shareApp() { lifecycleScope.launch {
+        try {
+            val file=withContext(Dispatchers.IO) {
+                val directory=File(cacheDir,"exports").apply { mkdirs() }
+                File(directory,"resq-mesh.apk").also { File(applicationInfo.sourceDir).copyTo(it,overwrite=true) }
+            }
+            val uri=FileProvider.getUriForFile(this@CascadeActivity,"$packageName.files",file)
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("application/vnd.android.package-archive")
+                .putExtra(Intent.EXTRA_STREAM,uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),"Share resQ mesh offline"))
+        } catch(error:Exception) { repository.notifyUser("Could not share the app. Check free storage and try again.") }
+    } }
     private fun export() { io.launch {
         val directory=File(cacheDir,"exports").apply { mkdirs() }
         val file=File(directory,"cascade-sanitized-log.txt").apply { writeText(repository.exportLog()) }
@@ -130,5 +211,5 @@ class CascadeActivity : ComponentActivity() {
             startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_STREAM,uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),"Export sanitized log"))
         }
     } }
-    override fun onDestroy() { speech?.destroy(); io.cancel(); super.onDestroy() }
+    override fun onDestroy() { unregisterReceiver(radioReceiver); speech?.destroy(); io.cancel(); super.onDestroy() }
 }

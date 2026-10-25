@@ -43,7 +43,9 @@ class ConversationNotificationReceiver : BroadcastReceiver() {
                         // A notification can outlive the process/service that posted it. Promote
                         // the mesh runtime before dispatch so Android keeps the transport alive
                         // after this short-lived receiver finishes.
-                        MeshForegroundService.start(context.applicationContext)
+                        if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh") {
+                            androidx.core.content.ContextCompat.startForegroundService(context,Intent(context,com.bitchat.android.cascade.CascadeService::class.java))
+                        } else MeshForegroundService.start(context.applicationContext)
                         val mesh = MeshServiceHolder.getUnifiedOrCreate(
                             context.applicationContext
                         )

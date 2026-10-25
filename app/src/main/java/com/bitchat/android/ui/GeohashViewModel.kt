@@ -87,6 +87,7 @@ class GeohashViewModel(
     }
 
     fun initialize() {
+        if(com.bitchat.android.BuildConfig.APPLICATION_ID == "org.cascade.mesh") return
         // Observe process lifecycle to manage background sampling
         kotlin.runCatching {
             ProcessLifecycleOwner.get().lifecycle.addObserver(this)

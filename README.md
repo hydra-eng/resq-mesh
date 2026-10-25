@@ -6,7 +6,7 @@
 <p align="center"><strong>Offline emergency coordination over nearby Bluetooth radios.</strong></p>
 <p align="center">
   <a href="https://resq-meshnet.web.app"><strong>Explore the website ↗</strong></a> &nbsp; · &nbsp;
-  <a href="https://github.com/hydra-eng/resq-mesh/releases/tag/v0.2.0"><strong>Download APK ↓</strong></a> &nbsp; · &nbsp;
+  <a href="https://github.com/hydra-eng/resq-mesh/releases/tag/v0.3.0"><strong>Download APK ↓</strong></a> &nbsp; · &nbsp;
   <a href="#tech-stack"><strong>Tech stack</strong></a> &nbsp; · &nbsp;
   <a href="#build-from-source"><strong>Build locally</strong></a>
 </p>
@@ -28,7 +28,7 @@
 
 An Android app for sending emergency requests and coordinating nearby responders over Bluetooth mesh when internet access is missing. **No server is required for app-to-app mesh use.** This repository also contains an explainer site and a downloadable debug APK.
 
-> **Status:** version 0.2.0 is an early development build. It is not a certified emergency service and has not been field-validated. Do not rely on it as your only means of getting help. BLE range, delivery, routing and battery life vary by device and conditions.
+> **Status:** version 0.3.0 is an early development build. It is not a certified emergency service and has not been field-validated. Do not rely on it as your only means of getting help. BLE range, delivery, routing and battery life vary by device and conditions.
 
 <details>
 <summary><strong>Project at a glance</strong></summary>
@@ -36,7 +36,7 @@ An Android app for sending emergency requests and coordinating nearby responders
 | Property | Value |
 |---|---|
 | Android application ID | `org.cascade.mesh` |
-| Version | `0.2.0` (version code 2) |
+| Version | `0.3.0` (version code 3) |
 | Minimum Android | 8.0 / API 26 |
 | Language and UI | Kotlin, Jetpack Compose, Material 3 |
 | Radio transport | Bluetooth Low Energy, using the Bitchat Android mesh stack |
@@ -44,7 +44,7 @@ An Android app for sending emergency requests and coordinating nearby responders
 | License | GPL-3.0-or-later; see [`LICENSE.md`](LICENSE.md) and upstream notices |
 | Repository | [GitHub](https://github.com/hydra-eng/resq-mesh) |
 | Website | [resQ mesh](https://resq-meshnet.web.app) |
-| Android download | [Debug APK](https://resq-meshnet.web.app/downloads/resq-mesh-0.2.0-debug.apk) |
+| Android download | [Debug APK](https://resq-meshnet.web.app/downloads/resq-mesh-0.3.0-debug.apk) |
 
 </details>
 
@@ -82,7 +82,7 @@ The technologies below are used by the current project. Versions come from the c
 | <img src="docs/media/stack/html5.svg" width="28" height="28" alt="HTML5"> <img src="docs/media/stack/css.svg" width="28" height="28" alt="CSS"> <img src="docs/media/stack/javascript.svg" width="28" height="28" alt="JavaScript"> | **HTML / CSS / JavaScript** | Single HTML file | Responsive explainer, theme switching, ASCII graphics and canvas simulator. |
 | <img src="docs/media/stack/threedotjs.svg" width="28" height="28" alt="Three.js"> | **Three.js** | 0.160.1 · pinned CDNJS UMD | Interactive mesh, flood, attack, partition and routing scenes. |
 | <img src="docs/media/stack/firebase.svg" width="28" height="28" alt="Firebase"> | **Firebase Hosting** | Static hosting | Public website at `resq-meshnet.web.app`; APK path redirects to GitHub. |
-| <img src="docs/media/stack/github.svg" width="28" height="28" alt="GitHub"> | **GitHub Releases** | v0.2.0 | Versioned debug APK, public source and SHA-256 asset digest. |
+| <img src="docs/media/stack/github.svg" width="28" height="28" alt="GitHub"> | **GitHub Releases** | v0.3.0 | Versioned debug APK, public source and SHA-256 asset digest. |
 | — | **JUnit / Robolectric / Mockito** | 4.13.2 / 4.15 / 5.23.0 | JVM and Android unit testing; see the validation results below. |
 
 <sub>Brand logos: <a href="https://simpleicons.org">Simple Icons</a>, stored locally in this repository. Logos identify the technologies and do not imply endorsement. <a href="docs/media/stack/README.md">Asset attribution</a>.</sub>
@@ -92,15 +92,29 @@ The technologies below are used by the current project. Versions come from the c
 1. Download the same APK onto both Android phones. The current debug APK is about 75 MiB. Check its SHA-256 before sharing or installing:
 
    ```text
-   3ceb62a4700b5d0e5d30783513d84267729064aadbc6205612a414db6007e356
+   7a91088e82c0f11d8df0b0aea8e004c53cb48c53e15210839c852c0cb310bfff
    ```
 
 2. Install the APK on each phone and open resQ mesh. Android may ask you to allow installation from the browser or file manager used to open the APK.
 3. Allow **Nearby devices**. On older Android versions, allow location while using the app; some phones also require the system Location switch to be on for BLE scanning. Notifications allow the foreground mesh service to show its status.
-4. On both phones, open **More → Connect** (or the mesh control on Home) and leave the app open while it starts discovery. Keep Bluetooth enabled and the phones nearby. The peer count changes when the other phone is discovered.
+4. On both phones, tap the **Bluetooth button at the top**, then **Nearby devices** on Home and leave the app open while it starts discovery. Keep Bluetooth enabled and the phones nearby. The peer count changes when the other phone is discovered.
 5. On one phone choose **Offer help**; on the other choose **Request help**. Use synthetic details for demonstrations. An SOS can be queued before a peer is reachable; the screen does not claim delivery until the transport reports it.
 
 Phones need compatible radios and the app needs to stay permitted to run in the foreground. Manufacturer power management may stop background scanning. Internet is not needed for the app's peer-to-peer mesh, but installation and opening the hosted website require an internet connection. Two phones must have compatible versions and both run resQ mesh.
+
+## Offline chats in 0.3
+
+Open **Home → Offline chats** for the nearby public timeline. Open the people panel and select a discovered peer for a private conversation. Saved contacts remain available from **People**.
+
+- Public nearby text, private messages, mentions, replies, delivery/read indicators and peer blocking use the upstream chat interface.
+- Photos, files and short voice notes are available in the nearby timeline and private chats; each attachment is limited to **256 KiB**.
+- Join a named text group with `/join flood-team`. For a password group, use `/join flood-team your-shared-password` on both phones (8–128 characters). Share a strong password through a trusted channel. Group names remain visible.
+- Named groups use the **resQ RQGROUP1 extension** and require compatible resQ versions. Password groups use PBKDF2-SHA256 and AES-GCM; they are not stock Bitchat group interoperability. Group attachments are disabled.
+- Settings includes **Share app** so an installed APK can be passed to another phone through Android’s share sheet.
+- Bluetooth availability and peer connectivity are shown separately. “Mesh online” means a nearby mesh peer is connected, not that internet is available.
+- Request, responder and hazard forms request location permission and obtain a fresh fix automatically. Manual area identifiers and the precise-location switch are removed. Routing still uses approximate areas internally; accepted responders receive encrypted exact coordinates.
+
+This build enables BLE offline features. It does not enable Wi-Fi Aware, Nostr, Tor or internet location channels, and does not claim full Bitchat feature parity. See [0.3 release notes](docs/RESQ-0.3.md) for validation and limitations.
 
 ## A normal request flow
 
@@ -108,7 +122,7 @@ Phones need compatible radios and the app needs to stay permitted to run in the 
 flowchart TD
   A[Open app] --> B{Choose a task}
   B -->|Need help| C[Describe need and urgency]
-  C --> D[Select coarse area and optional local details]
+  C --> D[Allow location and wait for a fresh GPS fix]
   D --> E[Review and send signed request]
   B -->|Offer help| F[Set capabilities and battery]
   F --> G[Discover nearby peers]
@@ -131,7 +145,7 @@ Contact names are stored on the device and are not verified identities. Private 
 
 The bottom navigation presents **Home**, **Requests**, **Map**, **People**, and **More**. The interface covers: onboarding, home, request creation, incoming request feed, request detail, map, people, one-to-one chat, capability profile, network topology, trust review, hazard reporting, simulation, and settings/help content. Larger layouts can display the people list beside the active conversation.
 
-- **Request help:** record a signed SOS with urgency, a coarse location cell, and structured assistance needs.
+- **Request help:** record a signed SOS with urgency, automatic GPS and structured assistance needs.
 - **Offer help:** advertise responder capabilities and current availability for local matching.
 - **Requests:** inspect active requests and their dispatch state; delivery is not inferred from local queueing.
 - **Map and topology:** show a coarse schematic and locally observed peers, not fabricated turn-by-turn directions or remote battery readings.
@@ -294,7 +308,7 @@ Dependency lockfiles and Gradle SHA-256 verification metadata are committed. Whe
 
 ## Validation and known limitations
 
-The core JVM suite previously passed 26 focused tests covering event-set laws, dispatch arrival protection, authorization, ranking, opportunity cost, replay, signatures, rate limits, privacy-context binding, hazard corroboration and claim parsing. Three focused Android Bluetooth-readiness regression tests passed. These checks use synthetic data and do not establish field safety.
+Version 0.3 passed 37 focused tests (7 Android, 14 crypto, 3 domain, 12 pipeline, 1 simulator). See [release validation](docs/RESQ-0.3.md). The earlier core JVM suite passed 26 focused tests covering event-set laws, dispatch arrival protection, authorization, ranking, opportunity cost, replay, signatures, rate limits, privacy-context binding, hazard corroboration and claim parsing. Three focused Android Bluetooth-readiness regression tests passed. These checks use synthetic data and do not establish field safety.
 
 The earlier inherited full Android suite had 23 failing tests out of 693 (with three skipped), including database-opening and chat/media-delivery assertions. The inherited Android lint run reported 313 errors and 386 warnings, including findings in upstream translation, permission, quantity and messaging code. These remain unresolved; consult [`website/VALIDATION.md`](website/VALIDATION.md) for the UI/browser validation scope and [`docs/CASCADE-VALIDATION.md`](docs/CASCADE-VALIDATION.md) for protocol checks.
 

@@ -795,12 +795,12 @@ private fun MainHeader(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
-                    LocationNotesButton(
+                    if(com.bitchat.android.BuildConfig.APPLICATION_ID != "org.cascade.mesh") LocationNotesButton(
                         viewModel = viewModel,
                         onClick = onLocationNotesClick
                     )
 
-                    LocationChannelsButton(
+                    if(com.bitchat.android.BuildConfig.APPLICATION_ID != "org.cascade.mesh") LocationChannelsButton(
                         viewModel = viewModel,
                         onClick = onLocationChannelsClick,
                         showLabel = crowdingMode != HeaderCrowdingMode.IconOnlyLocationChannel

@@ -31,13 +31,13 @@ import kotlin.math.*
 
 @Composable fun MapScreen(s: CascadeState,r: CascadeRepository,report: ()->Unit) {
     var victims by rememberSaveable { mutableStateOf(true) }; var responders by rememberSaveable { mutableStateOf(true) }; var hazards by rememberSaveable { mutableStateOf(true) }
-    Headline("06 / OFFLINE GRID","READ THE\nGROUND.","A schematic of reported coarse cells. No downloaded tiles, no internet, no invented safe routes.")
+    Headline("06 / OFFLINE GRID","READ THE\nGROUND.","A schematic of reported areas. No downloaded tiles, no internet, no invented safe routes.")
     val cells=(s.incidents.map { it.cell }+s.responders.map { it.cell }+s.hazards.keys+listOf(s.cell)).filter(Geo::valid).distinct().sorted()
     val centers=remember(cells) { cells.associateWith(Geo::center) }
     val minLat=centers.values.minOfOrNull { it.first } ?: 0.0; val maxLat=centers.values.maxOfOrNull { it.first } ?: 1.0
     val minLon=centers.values.minOfOrNull { it.second } ?: 0.0; val maxLon=centers.values.maxOfOrNull { it.second } ?: 1.0
     val ink=Ink; val paper=Paper; val accent=Blue; val green=Green; val yellow=Yellow; val signal=Signal
-    Canvas(Modifier.fillMaxWidth().height(320.dp).hardPanel(MaterialTheme.colorScheme.surfaceVariant).semantics { contentDescription="Offline map: ${s.incidents.size} incidents, ${s.hazards.size} hazard cells. Long press to report a hazard." }.pointerInput(Unit) { detectTapGestures(onLongPress={ report() }) }) {
+    Canvas(Modifier.fillMaxWidth().height(320.dp).hardPanel(MaterialTheme.colorScheme.surfaceVariant).semantics { contentDescription="Offline map: ${s.incidents.size} incidents, ${s.hazards.size} reported hazards. Long press to report a hazard." }.pointerInput(Unit) { detectTapGestures(onLongPress={ report() }) }) {
         repeat(9) { i -> val x=size.width*i/8; val y=size.height*i/8; drawLine(ink.copy(alpha=0.15f),Offset(x,0f),Offset(x,size.height)); drawLine(ink.copy(alpha=0.15f),Offset(0f,y),Offset(size.width,y)) }
         fun pos(cell: String): Offset {
             val center=centers[cell] ?: (0.0 to 0.0)
@@ -49,20 +49,20 @@ import kotlin.math.*
         if(responders) s.responders.forEach { drawCircle(accent,10f,pos(it.cell)+Offset(12f,0f)); drawCircle(ink,10f,pos(it.cell)+Offset(12f,0f),style=Stroke(2f)) }
         if(victims) s.incidents.forEach { drawCircle(urgencyColor(it.urgency),13f,pos(it.cell)-Offset(10f,0f)); drawCircle(ink,13f,pos(it.cell)-Offset(10f,0f),style=Stroke(2f)) }
         val paint=android.graphics.Paint().apply { color=ink.toArgb(); textSize=23f; typeface=android.graphics.Typeface.MONOSPACE }
-        centers.keys.forEach { cell -> val p=pos(cell); drawContext.canvas.nativeCanvas.drawText(cell,p.x-26,p.y+34,paint) }
+        centers.keys.forEachIndexed { index,cell -> val p=pos(cell); drawContext.canvas.nativeCanvas.drawText("Area ${index+1}",p.x-26,p.y+34,paint) }
     }
     Panel {
         Label("LAYERS / LONG PRESS GRID TO REPORT")
         Toggle("Victims / large markers",victims) { victims=it }; Toggle("Responders / small markers",responders) { responders=it }; Toggle("Hazard observations",hazards) { hazards=it }
-        Text("Partition boundaries cannot be inferred without other islands’ telemetry. Positions overlap inside a coarse cell.",fontSize=12.sp)
+        Text("Partition boundaries cannot be inferred without other islands’ telemetry. Nearby reports can overlap on this overview.",fontSize=12.sp)
     }
     Action("REPORT HAZARD",Yellow,onClick=report)
-    if(cells.isEmpty()) EmptyState("No location reports yet.","Confirm a coarse cell in SOS or your responder profile. The map will use those reports.")
+    if(cells.isEmpty()) EmptyState("No location reports yet.","Allow location in a help request or your helper profile. The map will use those reports.")
     s.hazards.forEach { (cell,h) -> Panel {
-        Label("CELL $cell / ${h.corroborations} INDEPENDENT REPORTS")
+        Label("REPORTED AREA / ${h.corroborations} INDEPENDENT REPORTS")
         Badge(if(h.trusted) "CORROBORATED HAZARD" else if(h.safeClaimTrusted) "CORROBORATED OBSERVATION" else "UNVERIFIED / CAUTION",if(h.safeClaimTrusted) Green else Yellow)
         Action("CONFIRM HAZARD",Yellow) { r.hazard("FLOOD",h.severity.coerceAtLeast(1),0,15,cell) }
-        Action("REPORT CELL CLEAR",Paper) { r.hazard("SAFE",0,0,15,cell) }
+        Action("REPORT AREA CLEAR",Paper) { r.hazard("SAFE",0,0,15,cell) }
     } }
 }
 
@@ -125,13 +125,13 @@ import kotlin.math.*
 @Composable fun HazardScreen(s: CascadeState,r: CascadeRepository,device: DeviceActions) {
     var type by rememberSaveable { mutableStateOf("FLOOD") }; var severity by rememberSaveable { mutableFloatStateOf(3f) }
     var depth by rememberSaveable { mutableFloatStateOf(60f) }; var expiry by rememberSaveable { mutableFloatStateOf(15f) }
-    var cell by rememberSaveable(s.cell) { mutableStateOf(s.cell) }; var photo by remember { mutableStateOf<String?>(null) }
+    val cell=s.cell; var photo by remember { mutableStateOf<String?>(null) }
     Headline("09 / HAZARD REPORT","WHAT DID\nYOU SEE?", "First-hand observations help. Repeat reports from one identity count as one witness.")
     Panel {
         FlowRow(horizontalArrangement=Arrangement.spacedBy(5.dp)) { listOf("FLOOD","CURRENT","DEBRIS","ELECTRICAL","SAFE").forEach { kind ->
             OutlinedButton(onClick={type=kind},modifier=Modifier.heightIn(min=56.dp),colors=ButtonDefaults.outlinedButtonColors(containerColor=if(type==kind) Yellow else Color.Transparent,contentColor=if(type==kind) Ink else MaterialTheme.colorScheme.onSurface)) { Text(kind,fontFamily=Mono,fontSize=10.sp) }
         } }
-        Input(cell,"OBSERVED COARSE CELL",{ cell=it.lowercase().take(5) })
+        LocationCard(s,device)
         Label("SEVERITY / ${severity.toInt()} OF 5"); Slider(severity,{severity=it},valueRange=1f..5f,steps=3)
         Label("OBSERVED DEPTH / ${depth.toInt()} CM"); Slider(depth,{depth=it},valueRange=0f..300f)
         Label("EXPIRES IN / ${expiry.toInt()} MIN"); Slider(expiry,{expiry=it},valueRange=1f..60f)
@@ -179,7 +179,7 @@ import kotlin.math.*
         Text("SOS parsing supports English, Hindi and Hinglish. Field controls use English; Hindi mode changes home actions and offline voice locale.",fontSize=12.sp)
         Toggle("Dark / hacker green",s.dark) { r.setting("dark",it.toString()) }
         Toggle("Battery saver",s.saver) { r.setting("saver",it.toString()) }
-        Toggle("Share precise location after accept",s.sharePrecise) { r.setting("precise",it.toString()) }
+        Text("Location is set automatically with your permission. Exact request coordinates are encrypted for the accepted responder.",fontSize=12.sp)
         Label("PACKET TTL / ${s.ttlHours} HOURS")
         Slider(s.ttlHours.toFloat(),{r.setting("ttl",it.toInt().toString())},valueRange=1f..24f,steps=22)
         Text("BLE hop limit: ${s.hopLimit}. Lower limits reduce propagation and battery cost.",fontSize=12.sp)
@@ -189,8 +189,19 @@ import kotlin.math.*
     }
     Action("BLUETOOTH + PERMISSIONS",Blue,onClick=device.permissions)
     Action("BATTERY OPTIMIZATION SETTINGS",Paper,onClick=device.batterySettings)
+    Action("Share this app offline",Paper,onClick=device.shareApp)
     Action("EXPORT SANITIZED LOGS",Ink,onClick=device.export)
     Action("WIPE LOCAL DATA",Signal) { wipe=true }
-    Panel { Label("resQ mesh / 0.2.0"); Text("Built on permissionlesstech / bitchat-android. GPL-3.0. BLE, relay, deduplication and Noise are retained from upstream.",fontSize=13.sp); Text("Development build. Simulator checks do not replace physical-device mesh validation or field evaluation.",fontSize=13.sp) }
+    Panel { Label("resQ mesh / 0.3.0"); Text("Built on permissionlesstech / bitchat-android. GPL-3.0. BLE, relay, deduplication and Noise are retained from upstream.",fontSize=13.sp); Text("Development build. Simulator checks do not replace physical-device mesh validation or field evaluation.",fontSize=13.sp) }
     if(wipe) AlertDialog(onDismissRequest={wipe=false},title={Text("Wipe this node?")},text={Text("Deletes this device’s events, private data, and identity keys. Copies already relayed to other devices cannot be recalled. Creates a fresh local identity.")},confirmButton={TextButton(onClick={wipe=false;r.wipe()}){Text("WIPE DATA")}},dismissButton={TextButton(onClick={wipe=false}){Text("KEEP DATA")}})
+}
+
+@Composable fun LocationCard(s: CascadeState,device: DeviceActions) {
+    LaunchedEffect(Unit) { device.location() }
+    var fresh by remember(s.gps) { mutableStateOf(s.gps?.isFresh()==true) }
+    LaunchedEffect(s.gps) { while(true) { fresh=s.gps?.isFresh()==true; kotlinx.coroutines.delay(1000) } }
+    Label("YOUR LOCATION")
+    Text(if(fresh) s.locationStatus else if(s.gps!=null) "Location needs refreshing" else s.locationStatus,fontSize=14.sp)
+    Text("Your phone fills this in automatically. Exact coordinates are encrypted for the responder who accepts your request.",fontSize=12.sp)
+    TextButton(onClick=device.location) { Text(if(fresh) "Refresh location" else "Enable location / retry") }
 }

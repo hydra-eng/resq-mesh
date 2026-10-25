@@ -494,7 +494,7 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
             // Callbacks
             override fun onMessageReceived(message: BitchatMessage) {
                 // A separately persisted application may consume its own decrypted namespace.
-                if(message.isPrivate && privateApplicationDelivery?.invoke(message)==true) return
+                if(privateApplicationDelivery?.invoke(message)==true) return
                 // Private-message admission is authoritative. In particular, do not forward a
                 // callback or notify after panic mode rejected the message while wiping state.
                 if (
@@ -878,7 +878,7 @@ class BluetoothMeshService(private val context: Context) : TransportBridgeServic
                 senderID = hexStringToByteArray(myPeerID),
                 recipientID = SpecialRecipients.BROADCAST,
                 timestamp = System.currentTimeMillis().toULong(),
-                payload = content.toByteArray(Charsets.UTF_8),
+                payload = (if(com.bitchat.android.BuildConfig.APPLICATION_ID=="org.cascade.mesh" && channel!=null) com.bitchat.android.cascade.transport.GroupEnvelope.encode(channel,content) else content).toByteArray(Charsets.UTF_8),
                 signature = null,
                 ttl = hopLimit.coerceIn(1u, MAX_TTL)
             )
